@@ -52,11 +52,10 @@ final class RNSmsRetrieverModule extends ReactContextBaseJavaModule {
 
   @SuppressWarnings("unused")
   @ReactMethod
-  public void startSmsRetriever(final Promise promise) {
-    mSmsHelper.startRetriever(promise);
+  public void startSmsRetriever(final int numMessages, final Promise promise) {
+    mSmsHelper.startRetriever(numMessages, promise);
   }
 
   //endregion
-
 
 }

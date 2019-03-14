@@ -6,79 +6,69 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 
-import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.bridge.WritableNativeMap;
-import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Status;
 
 public final class SmsBroadcastReceiver extends BroadcastReceiver {
 
-    private static final String SMS_EVENT = "me.furtado.smsretriever:SmsEvent";
+    private SmsReceiveListener mSmsListener;
 
-    private static final String EXTRAS_KEY = "extras";
-    private static final String MESSAGE_KEY = "message";
-    private static final String STATUS_KEY = "status";
-    private static final String TIMEOUT_KEY = "timeout";
-
-    private static final String EXTRAS_NULL_ERROR_MESSAGE = "Extras is null.";
-    private static final String STATUS_NULL_ERROR_MESSAGE = "Status is null.";
-    private static final String TIMEOUT_ERROR_MESSAGE = "Timeout error.";
-
-    private ReactApplicationContext mContext;
-
-    public SmsBroadcastReceiver(final ReactApplicationContext context) {
-        mContext = context;
+    public void setSmsListener(SmsReceiveListener smsListener) {
+        mSmsListener = smsListener;
     }
 
     @Override
     public void onReceive(final Context context, final Intent intent) {
-        if (SmsRetriever.SMS_RETRIEVED_ACTION.equals(intent.getAction())) {
-            final Bundle extras = intent.getExtras();
-            if (extras == null) {
-                emitJSEvent(EXTRAS_KEY, EXTRAS_NULL_ERROR_MESSAGE);
-                return;
-            }
-
-            final Status status = (Status) extras.get(SmsRetriever.EXTRA_STATUS);
-            if (status == null) {
-                emitJSEvent(STATUS_KEY, STATUS_NULL_ERROR_MESSAGE);
-                return;
-            }
-
-            switch (status.getStatusCode()) {
-                case CommonStatusCodes.SUCCESS: {
-                    final String message = (String) extras.get(SmsRetriever.EXTRA_SMS_MESSAGE);
-                    emitJSEvent(MESSAGE_KEY, message);
-                    break;
-                }
-
-                case CommonStatusCodes.TIMEOUT: {
-                    emitJSEvent(TIMEOUT_KEY, TIMEOUT_ERROR_MESSAGE);
-                    break;
-                }
-            }
-        }
-    }
-
-    //region - Privates
-
-    private void emitJSEvent(@NonNull final String key, final String message) {
-        if (mContext == null) {
+        if (!SmsRetriever.SMS_RETRIEVED_ACTION.equals(intent.getAction())) {
             return;
         }
 
-        if (!mContext.hasActiveCatalystInstance()) {
+        if (mSmsListener == null) {
             return;
         }
 
-        WritableNativeMap map = new WritableNativeMap();
-        map.putString(key, message);
+        final Bundle extras = intent.getExtras();
+        if (extras == null) {
+            mSmsListener.onSmsError("Extras is null");
+            return;
+        }
 
-        mContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(SMS_EVENT, map);
+        final Status status = (Status) extras.get(SmsRetriever.EXTRA_STATUS);
+        if (status == null) {
+            mSmsListener.onSmsError("Status is null");
+            return;
+        }
+
+        switch (status.getStatusCode()) {
+            case CommonStatusCodes.SUCCESS:
+                String message = (String) extras.get(SmsRetriever.EXTRA_SMS_MESSAGE);
+                mSmsListener.onSmsReceived(message);
+                break;
+
+            case CommonStatusCodes.TIMEOUT:
+                // Waiting for SMS timed out (5 minutes)
+                mSmsListener.onSmsTimeout();
+                break;
+
+            case CommonStatusCodes.API_NOT_CONNECTED:
+                mSmsListener.onSmsError("Api not connected");
+                break;
+
+            case CommonStatusCodes.NETWORK_ERROR:
+                mSmsListener.onSmsError("Network error");
+                break;
+
+            default:
+            case CommonStatusCodes.ERROR:
+                mSmsListener.onSmsError("Unknown error");
+                break;
+        }
     }
 
-    //endregion
-
+    public interface SmsReceiveListener {
+        void onSmsReceived(String message);
+        void onSmsTimeout();
+        void onSmsError(String error);
+    }
 }

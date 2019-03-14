@@ -1,35 +1,47 @@
 package me.furtado.smsretriever;
 
-import android.content.BroadcastReceiver;
 import android.content.IntentFilter;
+import android.util.Log;
 import android.support.annotation.NonNull;
 
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
 import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 
-final class SmsHelper {
+final class SmsHelper implements SmsBroadcastReceiver.SmsReceiveListener {
 
+    private static final String TAG = "SmsHelper";
+    private static final String SMS_EVENT = "me.furtado.smsretriever:SmsEvent";
     private static final String TASK_FAILURE_ERROR_TYPE = "TASK_FAILURE_ERROR_TYPE";
-    private static final String TASK_FAILURE_ERROR_MESSAGE = "Task failed.";
+    private static final String TASK_FAILURE_ERROR_MESSAGE = "Failed to start SMS retriever";
+
+    private static final String MESSAGE_KEY = "message";
+    private static final String TIMEOUT_KEY = "timeout";
+    private static final String ERROR_KEY = "error";
 
     private final ReactApplicationContext mContext;
 
-    private BroadcastReceiver mReceiver;
+    private SmsBroadcastReceiver mReceiver;
     private Promise mPromise;
+    private int mNumMessages;
 
     SmsHelper(@NonNull final ReactApplicationContext context) {
         mContext = context;
     }
 
-    //region - Package Access
+    //region - public
 
-    void startRetriever(final Promise promise) {
+    public void startRetriever(final int numMessages, final Promise promise) {
         mPromise = promise;
+        mNumMessages = numMessages;
+
+        Log.d(TAG, "Attempting to retrieve " + numMessages + " sms messages");
 
         if (!GooglePlayServicesHelper.isAvailable(mContext)) {
             promiseReject(GooglePlayServicesHelper.UNAVAILABLE_ERROR_TYPE, GooglePlayServicesHelper.UNAVAILABLE_ERROR_MESSAGE);
@@ -41,45 +53,89 @@ final class SmsHelper {
             return;
         }
 
-        final SmsRetrieverClient client = SmsRetriever.getClient(mContext);
-        final Task<Void> task = client.startSmsRetriever();
-        task.addOnSuccessListener(mOnSuccessListener);
-        task.addOnFailureListener(mOnFailureListener);
+        registerReceiver();
+        startSmsRetrieverClient();
+    }
+
+    public void onSmsReceived(final String message) {
+        if (message == null || message.isEmpty()) {
+            Log.w(TAG, "Received empty sms message");
+        }
+        else {
+            Log.d(TAG, "Received sms message");
+            mNumMessages -= 1;
+        }
+
+        emitJSEvent(MESSAGE_KEY, message);
+
+        if (mNumMessages <= 0) {
+            Log.d(TAG, "Last message received, unregistering receiver");
+            unregisterReceiver();
+        }
+        else {
+            Log.d(TAG, "Num remaining messages: " + mNumMessages);
+            startSmsRetrieverClient();
+        }
+    }
+
+    public void onSmsTimeout() {
+        // Warn app of timeout
+        emitJSEvent(TIMEOUT_KEY, "Sms Retriever Timeout");
+    }
+
+    public void onSmsError(final String error) {
+        emitJSEvent(ERROR_KEY, error);
     }
 
     //endregion
 
     //region - Privates
 
-    private boolean tryToRegisterReceiver() {
-        mReceiver = new SmsBroadcastReceiver(mContext);
+    private void startSmsRetrieverClient() {
+        Log.d(TAG, "Attempting to start SmsRetriever client");
 
-        final IntentFilter intentFilter = new IntentFilter(SmsRetriever.SMS_RETRIEVED_ACTION);
+        final SmsRetrieverClient client = SmsRetriever.getClient(mContext);
+        final Task<Void> task = client.startSmsRetriever();
 
+        task.addOnSuccessListener(new OnSuccessListener<Void>() {
+            @Override
+            public void onSuccess(Void aVoid) {
+                Log.d(TAG, "SmsRetriver client started successfully");
+                promiseResolve(true);
+            }
+        });
+        task.addOnFailureListener(new OnFailureListener() {
+            @Override
+            public void onFailure(@NonNull Exception e) {
+                Log.e(TAG, "Failed to start SmsRetriever client", e);
+                promiseReject(TASK_FAILURE_ERROR_TYPE, TASK_FAILURE_ERROR_MESSAGE);
+            }
+        });
+    }
+
+    private void registerReceiver() {
         try {
+            mReceiver = new SmsBroadcastReceiver();
+            mReceiver.setSmsListener(this);
+            final IntentFilter intentFilter = new IntentFilter(SmsRetriever.SMS_RETRIEVED_ACTION);
             mContext.registerReceiver(mReceiver, intentFilter);
-            return true;
         } catch (Exception e) {
-            e.printStackTrace();
-            return false;
+            Log.e(TAG, "Failed to register broadcast receiver", e);
         }
     }
 
-    private void unregisterReceiverIfNeeded() {
+    private void unregisterReceiver() {
         if (mReceiver == null) {
             return;
         }
 
         try {
             mContext.unregisterReceiver(mReceiver);
+            mReceiver = null;
         } catch (Exception e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to unregister broadcast receiver", e);
         }
     }
-
-    //endregion
-
-    //region - Promises
 
     private void promiseResolve(@NonNull final Object value) {
         if (mPromise != null) {
@@ -95,25 +151,20 @@ final class SmsHelper {
         }
     }
 
-    //endregion
-
-    //region - Listeners
-
-    private final OnSuccessListener<Void> mOnSuccessListener = new OnSuccessListener<Void>() {
-        @Override
-        public void onSuccess(Void aVoid) {
-            final boolean registered = tryToRegisterReceiver();
-            promiseResolve(registered);
+    private void emitJSEvent(@NonNull final String key, final String message) {
+        if (mContext == null) {
+            return;
         }
-    };
 
-    private final OnFailureListener mOnFailureListener = new OnFailureListener() {
-        @Override
-        public void onFailure(@NonNull Exception e) {
-            unregisterReceiverIfNeeded();
-            promiseReject(TASK_FAILURE_ERROR_TYPE, TASK_FAILURE_ERROR_MESSAGE);
+        if (!mContext.hasActiveCatalystInstance()) {
+            return;
         }
-    };
+
+        WritableNativeMap map = new WritableNativeMap();
+        map.putString(key, message);
+
+        mContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(SMS_EVENT, map);
+    }
 
     //endregion
 
