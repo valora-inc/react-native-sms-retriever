@@ -2,7 +2,7 @@ package me.furtado.smsretriever;
 
 import android.content.IntentFilter;
 import android.util.Log;
-import android.support.annotation.NonNull;
+import androidx.annotation.NonNull;
 
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
