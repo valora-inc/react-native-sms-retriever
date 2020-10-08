@@ -2,8 +2,10 @@ package me.furtado.smsretriever;
 
 import android.content.IntentFilter;
 import android.util.Log;
-import android.support.annotation.NonNull;
-
+import androidx.annotation.NonNull;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.concurrent.atomic.AtomicReference;
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.WritableNativeMap;
@@ -54,7 +56,8 @@ final class SmsHelper implements SmsBroadcastReceiver.SmsReceiveListener {
         }
 
         registerReceiver();
-        startSmsRetrieverClient();
+        startSmsRetrieverTasks();
+        promiseResolve(true);
     }
 
     public void onSmsReceived(final String message) {
@@ -74,12 +77,10 @@ final class SmsHelper implements SmsBroadcastReceiver.SmsReceiveListener {
         }
         else {
             Log.d(TAG, "Num remaining messages: " + mNumMessages);
-            startSmsRetrieverClient();
         }
     }
 
     public void onSmsTimeout() {
-        // Warn app of timeout
         emitJSEvent(TIMEOUT_KEY, "Sms Retriever Timeout");
     }
 
@@ -91,29 +92,28 @@ final class SmsHelper implements SmsBroadcastReceiver.SmsReceiveListener {
 
     //region - Privates
 
-    private void startSmsRetrieverClient() {
+    private void startSmsRetrieverTasks() {
         Log.d(TAG, "Attempting to start SmsRetriever client");
-
         final SmsRetrieverClient client = SmsRetriever.getClient(mContext);
-        final Task<Void> task = client.startSmsRetriever();
 
-        task.addOnSuccessListener(new OnSuccessListener<Void>() {
-            @Override
-            public void onSuccess(Void aVoid) {
-                Log.d(TAG, "SmsRetriver client started successfully");
-                promiseResolve(true);
-            }
-        });
-        task.addOnFailureListener(new OnFailureListener() {
-            @Override
-            public void onFailure(@NonNull Exception e) {
-                Log.e(TAG, "Failed to start SmsRetriever client", e);
-                promiseReject(TASK_FAILURE_ERROR_TYPE, TASK_FAILURE_ERROR_MESSAGE);
-            }
-        });
+        for (int i = 0; i < mNumMessages; i++) {
+            final Task<Void> task = client.startSmsRetriever();
+
+            task.addOnSuccessListener(new OnSuccessListener<Void>() {
+                @Override
+                public void onSuccess(Void aVoid) {
+                    Log.d(TAG, "SmsRetriver task started successfully");
+                }
+            });
+        };
     }
 
     private void registerReceiver() {
+        // already registerted
+        if (mReceiver != null) {
+          return;
+        }
+
         try {
             mReceiver = new SmsBroadcastReceiver();
             mReceiver.setSmsListener(this);
