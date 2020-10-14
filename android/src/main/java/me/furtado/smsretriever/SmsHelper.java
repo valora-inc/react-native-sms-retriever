@@ -105,6 +105,13 @@ final class SmsHelper implements SmsBroadcastReceiver.SmsReceiveListener {
                     Log.d(TAG, "SmsRetriver task started successfully");
                 }
             });
+
+            task.addOnFailureListener(new OnFailureListener() {	            
+                @Override	        
+                public void onFailure(@NonNull Exception e) {	
+                    Log.e(TAG, "Failed to start SmsRetriever client", e);	
+                }	
+            });
         };
     }
 
